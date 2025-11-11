@@ -244,6 +244,7 @@ class TransparentImageDataset(Dataset):
 
         if self.aspect_ratio_type == "auto":
             # Keep original aspect ratio, resize to fit within target resolution
+            # Then round to nearest multiple of 128
             aspect = width / height
             if aspect > 1:  # Landscape
                 new_width = self.resolution
@@ -251,6 +252,15 @@ class TransparentImageDataset(Dataset):
             else:  # Portrait or square
                 new_height = self.resolution
                 new_width = int(self.resolution * aspect)
+
+            # Round to nearest multiple of 128
+            new_width = round(new_width / 128) * 128
+            new_height = round(new_height / 128) * 128
+
+            # Ensure minimum size of 128
+            new_width = max(128, new_width)
+            new_height = max(128, new_height)
+
             image = image.resize((new_width, new_height), Image.LANCZOS)
         else:
             # Resize to cover target dimensions, then crop
