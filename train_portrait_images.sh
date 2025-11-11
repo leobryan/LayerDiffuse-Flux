@@ -32,6 +32,7 @@ echo "Starting training for portrait images..."
 export CUDA_VISIBLE_DEVICES=0
 
 # Option 1: Use preset portrait aspect ratio (768x1360)
+# Standard mode (requires ~24GB VRAM)
 accelerate launch --mixed_precision="bf16" train_style_lora.py \
     --base_model "./models/flux_merged_base" \
     --trans_vae "./models/TransparentVAE.pth" \
@@ -54,6 +55,7 @@ accelerate launch --mixed_precision="bf16" train_style_lora.py \
     --guidance_scale 3.5 \
     --use_offset \
     --mixed_precision "bf16" \
+    --gradient_checkpointing \
     --checkpointing_steps 500 \
     --validation_steps 500 \
     --validation_prompts \
@@ -65,6 +67,10 @@ accelerate launch --mixed_precision="bf16" train_style_lora.py \
     --dataloader_num_workers 4 \
     --max_grad_norm 1.0 \
     --seed 42
+
+# If you encounter OOM (Out of Memory) errors, use CPU offload mode:
+# (Slower but uses only ~16GB VRAM)
+# Add --enable_cpu_offload flag to the above command
 
 echo ""
 echo "=================================="

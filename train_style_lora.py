@@ -242,6 +242,19 @@ def parse_args():
         help="Number of workers for data loading"
     )
 
+    # Memory optimization
+    parser.add_argument(
+        "--enable_cpu_offload",
+        action="store_true",
+        help="Enable CPU offload for VAE and text encoders to save VRAM"
+    )
+    parser.add_argument(
+        "--gradient_checkpointing",
+        action="store_true",
+        default=True,
+        help="Enable gradient checkpointing (default: True)"
+    )
+
     args = parser.parse_args()
     return args
 
@@ -483,6 +496,12 @@ def main():
     pipe.text_encoder.requires_grad_(False)
     pipe.text_encoder_2.requires_grad_(False)
 
+    # Set frozen models to eval mode to save memory
+    pipe.vae.eval()
+    trans_vae.eval()
+    pipe.text_encoder.eval()
+    pipe.text_encoder_2.eval()
+
     # Setup LoRA for transformer
     logger.info("Setting up LoRA adapter")
     lora_config = LoraConfig(
@@ -495,6 +514,14 @@ def main():
     # Apply LoRA to transformer
     pipe.transformer = get_peft_model(pipe.transformer, lora_config)
     pipe.transformer.print_trainable_parameters()
+
+    # Enable gradient checkpointing to save memory
+    if args.gradient_checkpointing:
+        if hasattr(pipe.transformer, 'enable_gradient_checkpointing'):
+            pipe.transformer.enable_gradient_checkpointing()
+            logger.info("Gradient checkpointing enabled")
+        else:
+            logger.warning("Gradient checkpointing not available for this model")
 
     # Create dataloaders
     logger.info(f"Loading training data from {args.data_dir}")
@@ -540,10 +567,15 @@ def main():
     )
 
     # Move other components to device
-    pipe.vae.to(accelerator.device)
-    trans_vae.to(accelerator.device)
-    pipe.text_encoder.to(accelerator.device)
-    pipe.text_encoder_2.to(accelerator.device)
+    if not args.enable_cpu_offload:
+        pipe.vae.to(accelerator.device)
+        trans_vae.to(accelerator.device)
+        pipe.text_encoder.to(accelerator.device)
+        pipe.text_encoder_2.to(accelerator.device)
+        logger.info("All models loaded to GPU")
+    else:
+        # Keep VAE and text encoders on CPU, move only when needed
+        logger.info("CPU offload enabled - VAE and text encoders will be moved on demand")
 
     # Training info
     total_batch_size = args.batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -576,6 +608,11 @@ def main():
 
                 # Encode images to latents using TransparentVAE
                 with torch.no_grad():
+                    if args.enable_cpu_offload:
+                        # Move VAE to GPU temporarily
+                        pipe.vae.to(accelerator.device)
+                        trans_vae.to(accelerator.device)
+
                     latents = trans_vae.encode(
                         img_rgba=img_rgba,
                         img_rgb=img_rgb,
@@ -583,12 +620,32 @@ def main():
                         use_offset=args.use_offset,
                     )
 
+                    if args.enable_cpu_offload:
+                        # Move VAE back to CPU
+                        pipe.vae.to("cpu")
+                        trans_vae.to("cpu")
+                        torch.cuda.empty_cache()
+
+                # Free up memory after encoding
+                del img_rgba, img_rgb, padded_rgb
+
                 # Encode text prompts
                 with torch.no_grad():
+                    if args.enable_cpu_offload:
+                        # Move text encoders to GPU temporarily
+                        pipe.text_encoder.to(accelerator.device)
+                        pipe.text_encoder_2.to(accelerator.device)
+
                     prompt_embeds, pooled_prompt_embeds, text_ids = encode_prompt(
                         pipe, captions[0] if len(captions) == 1 else captions,
                         accelerator.device, num_images_per_prompt=1
                     )
+
+                    if args.enable_cpu_offload:
+                        # Move text encoders back to CPU
+                        pipe.text_encoder.to("cpu")
+                        pipe.text_encoder_2.to("cpu")
+                        torch.cuda.empty_cache()
 
                 # Compute loss
                 loss = compute_loss(
@@ -600,6 +657,9 @@ def main():
                     text_ids=text_ids,
                     guidance_scale=args.guidance_scale,
                 )
+
+                # Free up memory after loss computation
+                del latents, prompt_embeds, pooled_prompt_embeds, text_ids
 
                 # Backward pass
                 accelerator.backward(loss)
