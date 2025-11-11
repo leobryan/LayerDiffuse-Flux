@@ -215,17 +215,21 @@ class TransparentImageDataset(Dataset):
             image = image.transpose(Image.FLIP_LEFT_RIGHT)
 
         # Convert to numpy array
-        img_np = np.array(image).astype(np.float32)  # (H, W, 4)
+        img_np = np.array(image)  # (H, W, 4) uint8
+
+        # Convert to float [0, 1] for initial processing
+        img_np_01 = img_np.astype(np.float32) / 255.0  # (H, W, 4), [0, 1]
 
         # Generate padded RGB if needed
+        # IMPORTANT: Pass [0,1] range to pad_rgb to match original repo usage
         if self.use_padded_rgb:
-            padded_rgb_np = pad_rgb(img_np.astype(np.uint8))  # Returns float32
-            padded_rgb = torch.from_numpy(padded_rgb_np).permute(2, 0, 1) / 255.0  # (C, H, W), [0, 1]
+            padded_rgb_np = pad_rgb(img_np_01)  # Input [0,1], output [0,1]
+            padded_rgb = torch.from_numpy(padded_rgb_np).permute(2, 0, 1)  # (C, H, W), [0, 1]
         else:
             padded_rgb = None
 
         # Convert to tensor
-        img_rgba = torch.from_numpy(img_np).permute(2, 0, 1) / 255.0  # (4, H, W), [0, 1]
+        img_rgba = torch.from_numpy(img_np_01).permute(2, 0, 1)  # (4, H, W), [0, 1]
 
         # Extract RGB and apply normalization for VAE
         rgb = img_rgba[:3]  # (3, H, W)
