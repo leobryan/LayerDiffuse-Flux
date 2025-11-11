@@ -63,17 +63,22 @@ accelerate launch --mixed_precision="bf16" train_style_lora.py \
 | 576x576 | ~12GB | 可接受 |
 | 512x512 | ~10GB | 基础 |
 
+⚠️ **重要限制**: 所有尺寸必须是 **128 的倍数**（Flux VAE 16倍 × TransparentVAE 8倍下采样）
+
 **竖屏/横屏优化** (像素数相同，显存占用类似):
 
 | 配置 | 分辨率 | 显存 |
 |------|--------|------|
-| 标准竖屏 | 768x1360 | ~35GB |
-| 低显存竖屏 | 576x1024 | ~18GB |
-| 最小竖屏 | 512x912 | ~14GB |
+| 标准竖屏 | 1280x768 | ~33GB |
+| 中等竖屏 | 1024x640 | ~25GB |
+| 低显存竖屏 | 768x512 | ~18GB |
+| 最小竖屏 | 640x512 | ~16GB |
 
 ```bash
-# 使用较低分辨率
---height 576 --width 1024  # 9:16 竖屏，低显存
+# 使用较低分辨率（必须是 128 的倍数）
+--height 1024 --width 640  # 竖屏，中等显存
+# 或
+--height 768 --width 512   # 竖屏，低显存
 # 或
 --height 512 --width 512   # 方形，最低显存
 ```
@@ -152,8 +157,8 @@ accelerate launch --mixed_precision="bf16" train_style_lora.py \
     --base_model "./models/flux_merged_base" \
     --trans_vae "./models/TransparentVAE.pth" \
     --data_dir "./training_data" \
-    --height 576 \
-    --width 1024 \
+    --height 1024 \
+    --width 640 \
     --batch_size 1 \
     --gradient_accumulation_steps 8 \
     --gradient_checkpointing \
@@ -161,7 +166,7 @@ accelerate launch --mixed_precision="bf16" train_style_lora.py \
     --lora_rank 8
 ```
 
-**预期显存**: ~18-22GB
+**预期显存**: ~20-24GB
 
 ### 16GB 显卡（RTX 4080, V100 16GB）- 极限优化
 
@@ -269,9 +274,9 @@ print(f"Reserved: {torch.cuda.memory_reserved(0)/1024**3:.2f} GB")
 | 显卡 | 分辨率 | Rank | CPU Offload | 预期显存 | 速度 |
 |------|--------|------|-------------|---------|------|
 | A100 40GB | 1024x1024 | 16 | ❌ | 35GB | 1.0x |
-| A100 40GB | 768x1360 | 16 | ❌ | 35GB | 1.0x |
-| RTX 4090 24GB | 576x1024 | 8 | ✅ | 20GB | 0.5x |
-| RTX 3090 24GB | 576x1024 | 8 | ✅ | 20GB | 0.5x |
+| A100 40GB | 1280x768 | 16 | ❌ | 33GB | 1.0x |
+| RTX 4090 24GB | 1024x640 | 8 | ✅ | 22GB | 0.5x |
+| RTX 3090 24GB | 768x512 | 8 | ✅ | 18GB | 0.5x |
 | V100 16GB | 512x512 | 4 | ✅ | 15GB | 0.3x |
 
 **速度**: 相对于 A100 40GB 标准配置的训练速度

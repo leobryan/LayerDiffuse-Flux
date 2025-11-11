@@ -90,6 +90,9 @@ class TransparentImageDataset(Dataset):
         """
         Calculate target dimensions based on aspect ratio type
 
+        IMPORTANT: All dimensions must be divisible by 128 (16 * 8) to work with
+        Flux VAE (16x downsampling) and TransparentVAE encoder (8x downsampling)
+
         Args:
             resolution: Base resolution
             aspect_ratio_type: Type of aspect ratio
@@ -101,22 +104,47 @@ class TransparentImageDataset(Dataset):
             return resolution, resolution
         elif aspect_ratio_type == "portrait":
             # 9:16 ratio - portrait orientation
-            # Use resolution as the shorter dimension
             if resolution == 1024:
-                return 1360, 768  # 16:9 inverted to 9:16, but keeping height larger
+                # 1280 / 128 = 10 ✓, 768 / 128 = 6 ✓
+                # Actual ratio: 1280:768 = 1.67:1 ≈ 5:3 (close to 9:16)
+                return 1280, 768
+            elif resolution == 768:
+                # 1024 / 128 = 8 ✓, 640 / 128 = 5 ✓
+                # Ratio: 1024:640 = 1.6:1 ≈ 8:5
+                return 1024, 640
+            elif resolution == 512:
+                # 768 / 128 = 6 ✓, 512 / 128 = 4 ✓
+                # Ratio: 768:512 = 1.5:1 ≈ 3:2
+                return 768, 512
             else:
+                # Round to nearest multiple of 128
                 width = int(resolution * 9 / 16)
-                return resolution, width
+                width = round(width / 128) * 128
+                height = round(resolution / 128) * 128
+                return height, width
         elif aspect_ratio_type == "landscape":
             # 16:9 ratio - landscape orientation
             if resolution == 1024:
-                return 576, 1024  # 9:16 ratio with width larger
+                # 640 / 128 = 5 ✓, 1024 / 128 = 8 ✓
+                # Ratio: 1024:640 = 1.6:1 ≈ 16:10
+                return 640, 1024
+            elif resolution == 768:
+                # 512 / 128 = 4 ✓, 768 / 128 = 6 ✓
+                # Ratio: 768:512 = 1.5:1 ≈ 3:2
+                return 512, 768
+            elif resolution == 512:
+                # 384 / 128 = 3 ✓, 512 / 128 = 4 ✓
+                # Ratio: 512:384 = 1.33:1 ≈ 4:3
+                return 384, 512
             else:
+                # Round to nearest multiple of 128
                 height = int(resolution * 9 / 16)
-                return height, resolution
+                height = round(height / 128) * 128
+                width = round(resolution / 128) * 128
+                return height, width
         elif aspect_ratio_type == "auto":
-            # Will be determined per-image
-            return resolution, resolution
+            # Will be determined per-image, ensure it's multiple of 128
+            return round(resolution / 128) * 128, round(resolution / 128) * 128
         else:
             raise ValueError(f"Unknown aspect_ratio_type: {aspect_ratio_type}")
 
