@@ -266,6 +266,82 @@ def encode_prompt(pipe, prompt, device, num_images_per_prompt=1):
     return prompt_embeds, pooled_prompt_embeds, text_ids
 
 
+def prepare_latent_image_ids(batch_size, height, width, device, dtype):
+    """
+    Prepare latent image position IDs for Flux transformer
+
+    Args:
+        batch_size: Batch size
+        height: Latent height in patches
+        width: Latent width in patches
+        device: Device
+        dtype: Data type
+
+    Returns:
+        latent_image_ids: Position IDs tensor
+    """
+    latent_image_ids = torch.zeros(height, width, 3)
+    latent_image_ids[..., 1] = latent_image_ids[..., 1] + torch.arange(height)[:, None]
+    latent_image_ids[..., 2] = latent_image_ids[..., 2] + torch.arange(width)[None, :]
+
+    latent_image_id_height, latent_image_id_width, latent_image_id_channels = latent_image_ids.shape
+
+    latent_image_ids = latent_image_ids.reshape(
+        latent_image_id_height * latent_image_id_width, latent_image_id_channels
+    )
+
+    return latent_image_ids.to(device=device, dtype=dtype)
+
+
+def pack_latents(latents, batch_size, num_channels_latents, height, width):
+    """
+    Pack latents for Flux transformer (2x2 patch packing)
+
+    Args:
+        latents: Input latents (B, C, H, W)
+        batch_size: Batch size
+        num_channels_latents: Number of latent channels
+        height: Latent height
+        width: Latent width
+
+    Returns:
+        Packed latents
+    """
+    latents = latents.view(batch_size, num_channels_latents, height // 2, 2, width // 2, 2)
+    latents = latents.permute(0, 2, 4, 1, 3, 5)
+    latents = latents.reshape(batch_size, (height // 2) * (width // 2), num_channels_latents * 4)
+    return latents
+
+
+def unpack_latents(latents, height, width, vae_scale_factor):
+    """
+    Unpack latents from Flux transformer format
+
+    Args:
+        latents: Packed latents
+        height: Target height
+        width: Target width
+        vae_scale_factor: VAE scale factor
+
+    Returns:
+        Unpacked latents (B, C, H, W)
+    """
+    batch_size, num_patches, channels = latents.shape
+
+    # height and width are the original image dimensions divided by vae_scale_factor
+    # For Flux: vae_scale_factor = 16, so latent size is img_size / 16
+    # After packing: (H/2) * (W/2) patches
+
+    latent_height = height // vae_scale_factor
+    latent_width = width // vae_scale_factor
+
+    latents = latents.view(batch_size, latent_height // 2, latent_width // 2, channels // 4, 2, 2)
+    latents = latents.permute(0, 3, 1, 4, 2, 5)
+    latents = latents.reshape(batch_size, channels // 4, latent_height, latent_width)
+
+    return latents
+
+
 def compute_loss(
     model,
     noise_scheduler,
@@ -305,10 +381,12 @@ def compute_loss(
     noisy_latents = timesteps.view(-1, 1, 1, 1) * latents + (1 - timesteps.view(-1, 1, 1, 1)) * noise
 
     # Prepare latent image ids (positional encoding)
-    latent_image_ids = noise_scheduler._prepare_latent_image_ids(
+    latent_height = latents.shape[2] // 2  # Height in packed patches
+    latent_width = latents.shape[3] // 2   # Width in packed patches
+    latent_image_ids = prepare_latent_image_ids(
         bsz,
-        latents.shape[2] // 2,  # Height in patches
-        latents.shape[3] // 2,  # Width in patches
+        latent_height,
+        latent_width,
         latents.device,
         latents.dtype,
     )
@@ -318,11 +396,12 @@ def compute_loss(
     target = latents - noise
 
     # Pack latents (Flux uses 2x2 patch packing)
-    packed_noisy_latents = noise_scheduler._pack_latents(
+    packed_noisy_latents = pack_latents(
         noisy_latents,
         bsz,
-        latents.shape[2],
-        latents.shape[3],
+        latents.shape[1],  # num_channels
+        latents.shape[2],  # height
+        latents.shape[3],  # width
     )
 
     # Expand timesteps to match the packed format
@@ -342,11 +421,18 @@ def compute_loss(
     )[0]
 
     # Unpack the predictions
-    model_pred = noise_scheduler._unpack_latents(
+    # Get original image dimensions from latent dimensions
+    # latents.shape[2] and latents.shape[3] are latent dimensions
+    # We need to convert back through: latent_dim * vae_scale_factor = image_dim
+    vae_scale_factor = 16  # Flux VAE scale factor
+    original_height = latents.shape[2] * vae_scale_factor
+    original_width = latents.shape[3] * vae_scale_factor
+
+    model_pred = unpack_latents(
         model_pred,
-        latents.shape[2],
-        latents.shape[3],
-        noise_scheduler.config.vae_scale_factor,
+        original_height,
+        original_width,
+        vae_scale_factor,
     )
 
     # Compute MSE loss
