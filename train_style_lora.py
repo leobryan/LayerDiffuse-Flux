@@ -56,7 +56,26 @@ def parse_args():
         "--resolution",
         type=int,
         default=1024,
-        help="Training image resolution"
+        help="Training image resolution (base size)"
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        default=None,
+        help="Explicit training image height (overrides resolution/aspect_ratio_type)"
+    )
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=None,
+        help="Explicit training image width (overrides resolution/aspect_ratio_type)"
+    )
+    parser.add_argument(
+        "--aspect_ratio_type",
+        type=str,
+        default="square",
+        choices=["square", "portrait", "landscape", "auto"],
+        help="Aspect ratio type: square (1:1), portrait (9:16), landscape (16:9), or auto (keep original)"
     )
     parser.add_argument(
         "--center_crop",
@@ -401,6 +420,9 @@ def main():
         center_crop=args.center_crop,
         random_flip=args.random_flip,
         shuffle=True,
+        aspect_ratio_type=args.aspect_ratio_type,
+        height=args.height,
+        width=args.width,
     )
 
     # Setup optimizer

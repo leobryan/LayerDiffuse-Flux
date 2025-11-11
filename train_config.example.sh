@@ -31,6 +31,7 @@ accelerate launch --mixed_precision="bf16" train_style_lora.py \
     --data_dir "./training_data" \
     --output_dir "./output/style_lora_$(date +%Y%m%d_%H%M%S)" \
     --resolution 1024 \
+    --aspect_ratio_type "square" \
     --center_crop \
     --random_flip \
     --batch_size 1 \
@@ -57,6 +58,24 @@ accelerate launch --mixed_precision="bf16" train_style_lora.py \
     --dataloader_num_workers 4 \
     --max_grad_norm 1.0 \
     --seed 42
+
+# ============================================================================
+# Alternative: Training with 9:16 portrait images
+# ============================================================================
+echo ""
+echo "Alternative configurations for different aspect ratios:"
+echo ""
+echo "For 9:16 portrait images (768x1360):"
+echo "  --aspect_ratio_type portrait"
+echo ""
+echo "For 16:9 landscape images (1024x576):"
+echo "  --aspect_ratio_type landscape"
+echo ""
+echo "For custom size (e.g., 576x1024):"
+echo "  --height 1024 --width 576"
+echo ""
+echo "To keep original aspect ratios:"
+echo "  --aspect_ratio_type auto"
 
 echo ""
 echo "Training completed! Check the output directory for trained LoRA weights."

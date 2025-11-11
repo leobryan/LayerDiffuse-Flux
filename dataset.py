@@ -44,26 +44,81 @@ class TransparentImageDataset(Dataset):
         random_flip=False,
         metadata_file="metadata.jsonl",
         use_padded_rgb=True,
+        aspect_ratio_type="square",  # "square", "portrait", "landscape", "auto"
+        height=None,
+        width=None,
     ):
         """
         Args:
             data_dir: Root directory containing images and captions
-            resolution: Target image resolution (default: 1024)
+            resolution: Target image resolution (default: 1024) - used for square or as base size
             center_crop: Whether to center crop images
             random_flip: Whether to randomly flip images horizontally
             metadata_file: Name of the metadata file (JSONL format)
             use_padded_rgb: Whether to generate padded RGB for transparent regions
+            aspect_ratio_type: Type of aspect ratio handling
+                - "square": Force to 1:1 (1024x1024)
+                - "portrait": 9:16 ratio (768x1360 or 576x1024)
+                - "landscape": 16:9 ratio (1360x768 or 1024x576)
+                - "auto": Keep original aspect ratio (resize to fit resolution)
+            height: Explicit height (overrides resolution/aspect_ratio_type)
+            width: Explicit width (overrides resolution/aspect_ratio_type)
         """
         self.data_dir = Path(data_dir)
         self.resolution = resolution
         self.center_crop = center_crop
         self.random_flip = random_flip
         self.use_padded_rgb = use_padded_rgb
+        self.aspect_ratio_type = aspect_ratio_type
+
+        # Calculate target dimensions
+        if height is not None and width is not None:
+            self.target_height = height
+            self.target_width = width
+        else:
+            self.target_height, self.target_width = self._calculate_dimensions(
+                resolution, aspect_ratio_type
+            )
 
         # Load image-caption pairs
         self.samples = self._load_samples(metadata_file)
 
         print(f"Loaded {len(self.samples)} training samples from {data_dir}")
+        print(f"Target size: {self.target_height}x{self.target_width} (aspect_ratio_type: {aspect_ratio_type})")
+
+    def _calculate_dimensions(self, resolution, aspect_ratio_type):
+        """
+        Calculate target dimensions based on aspect ratio type
+
+        Args:
+            resolution: Base resolution
+            aspect_ratio_type: Type of aspect ratio
+
+        Returns:
+            (height, width) tuple
+        """
+        if aspect_ratio_type == "square":
+            return resolution, resolution
+        elif aspect_ratio_type == "portrait":
+            # 9:16 ratio - portrait orientation
+            # Use resolution as the shorter dimension
+            if resolution == 1024:
+                return 1360, 768  # 16:9 inverted to 9:16, but keeping height larger
+            else:
+                width = int(resolution * 9 / 16)
+                return resolution, width
+        elif aspect_ratio_type == "landscape":
+            # 16:9 ratio - landscape orientation
+            if resolution == 1024:
+                return 576, 1024  # 9:16 ratio with width larger
+            else:
+                height = int(resolution * 9 / 16)
+                return height, resolution
+        elif aspect_ratio_type == "auto":
+            # Will be determined per-image
+            return resolution, resolution
+        else:
+            raise ValueError(f"Unknown aspect_ratio_type: {aspect_ratio_type}")
 
     def _load_samples(self, metadata_file):
         """Load image and caption pairs"""
@@ -155,27 +210,47 @@ class TransparentImageDataset(Dataset):
         return img_rgba, img_rgb, padded_rgb
 
     def _resize_and_crop(self, image):
-        """Resize and optionally center crop the image"""
+        """Resize and optionally center crop the image to target dimensions"""
         width, height = image.size
+        target_h, target_w = self.target_height, self.target_width
 
-        # Resize
-        if width < height:
-            new_width = self.resolution
-            new_height = int(height * self.resolution / width)
+        if self.aspect_ratio_type == "auto":
+            # Keep original aspect ratio, resize to fit within target resolution
+            aspect = width / height
+            if aspect > 1:  # Landscape
+                new_width = self.resolution
+                new_height = int(self.resolution / aspect)
+            else:  # Portrait or square
+                new_height = self.resolution
+                new_width = int(self.resolution * aspect)
+            image = image.resize((new_width, new_height), Image.LANCZOS)
         else:
-            new_height = self.resolution
-            new_width = int(width * self.resolution / height)
+            # Resize to cover target dimensions, then crop
+            target_aspect = target_w / target_h
+            current_aspect = width / height
 
-        image = image.resize((new_width, new_height), Image.LANCZOS)
+            if current_aspect > target_aspect:
+                # Image is wider than target, fit by height
+                new_height = target_h
+                new_width = int(target_h * current_aspect)
+            else:
+                # Image is taller than target, fit by width
+                new_width = target_w
+                new_height = int(target_w / current_aspect)
 
-        # Center crop if needed
-        if self.center_crop:
-            width, height = image.size
-            left = (width - self.resolution) // 2
-            top = (height - self.resolution) // 2
-            right = left + self.resolution
-            bottom = top + self.resolution
-            image = image.crop((left, top, right, bottom))
+            image = image.resize((new_width, new_height), Image.LANCZOS)
+
+            # Center crop to exact target dimensions
+            if self.center_crop:
+                width, height = image.size
+                left = (width - target_w) // 2
+                top = (height - target_h) // 2
+                right = left + target_w
+                bottom = top + target_h
+                image = image.crop((left, top, right, bottom))
+            else:
+                # If not center crop, resize directly to target
+                image = image.resize((target_w, target_h), Image.LANCZOS)
 
         return image
 
@@ -228,6 +303,9 @@ def create_dataloader(
     center_crop=True,
     random_flip=True,
     shuffle=True,
+    aspect_ratio_type="square",
+    height=None,
+    width=None,
 ):
     """
     Create a DataLoader for transparent image training
@@ -236,10 +314,13 @@ def create_dataloader(
         data_dir: Root directory containing training data
         batch_size: Batch size
         num_workers: Number of worker processes for data loading
-        resolution: Target image resolution
+        resolution: Target image resolution (base size)
         center_crop: Whether to center crop images
         random_flip: Whether to randomly flip images
         shuffle: Whether to shuffle the dataset
+        aspect_ratio_type: Type of aspect ratio handling ("square", "portrait", "landscape", "auto")
+        height: Explicit target height (optional)
+        width: Explicit target width (optional)
 
     Returns:
         DataLoader instance
@@ -249,6 +330,9 @@ def create_dataloader(
         resolution=resolution,
         center_crop=center_crop,
         random_flip=random_flip,
+        aspect_ratio_type=aspect_ratio_type,
+        height=height,
+        width=width,
     )
 
     dataloader = DataLoader(

@@ -253,7 +253,13 @@ accelerate launch --mixed_precision="bf16" --num_processes=4 train_style_lora.py
 
 #### 数据参数
 - `--data_dir`: 训练数据目录
-- `--resolution`: 训练图像分辨率 (推荐 1024)
+- `--resolution`: 训练图像分辨率/基础尺寸 (推荐 1024)
+- `--aspect_ratio_type`: 长宽比类型
+  - `square`: 1:1 方形 (1024x1024) - 默认
+  - `portrait`: 9:16 竖屏 (768x1360)
+  - `landscape`: 16:9 横屏 (1024x576)
+  - `auto`: 保持原始长宽比
+- `--height` / `--width`: 显式指定高度和宽度 (覆盖 resolution 和 aspect_ratio_type)
 - `--center_crop`: 是否中心裁剪
 - `--random_flip`: 是否随机水平翻转 (数据增强)
 
@@ -296,6 +302,111 @@ tensorboard --logdir ./output/style_lora_XXXXXX/logs
 
 # 在浏览器中打开: http://localhost:6006
 ```
+
+### 训练非方形图像 (9:16 / 16:9)
+
+如果你的训练数据主要是长图像（如竖屏 9:16 或横屏 16:9），需要特别配置：
+
+#### 方式1: 使用预设长宽比
+
+**训练竖屏图像 (9:16 Portrait)**
+
+```bash
+accelerate launch --mixed_precision="bf16" train_style_lora.py \
+    --base_model "./models/flux_merged_base" \
+    --trans_vae "./models/TransparentVAE.pth" \
+    --data_dir "./training_data" \
+    --output_dir "./output/style_lora_portrait" \
+    --aspect_ratio_type "portrait" \
+    --resolution 1024 \
+    --center_crop \
+    --random_flip \
+    --batch_size 1 \
+    --gradient_accumulation_steps 4 \
+    --num_train_epochs 100 \
+    --learning_rate 1e-4
+```
+
+**训练横屏图像 (16:9 Landscape)**
+
+```bash
+accelerate launch --mixed_precision="bf16" train_style_lora.py \
+    --base_model "./models/flux_merged_base" \
+    --trans_vae "./models/TransparentVAE.pth" \
+    --data_dir "./training_data" \
+    --output_dir "./output/style_lora_landscape" \
+    --aspect_ratio_type "landscape" \
+    --resolution 1024 \
+    --center_crop \
+    --random_flip \
+    --batch_size 1 \
+    --gradient_accumulation_steps 4 \
+    --num_train_epochs 100 \
+    --learning_rate 1e-4
+```
+
+#### 方式2: 自定义尺寸
+
+如果需要精确控制尺寸（例如 576x1024 的竖屏图）：
+
+```bash
+accelerate launch --mixed_precision="bf16" train_style_lora.py \
+    --base_model "./models/flux_merged_base" \
+    --trans_vae "./models/TransparentVAE.pth" \
+    --data_dir "./training_data" \
+    --output_dir "./output/style_lora_custom" \
+    --height 1024 \
+    --width 576 \
+    --center_crop \
+    --random_flip \
+    --batch_size 1 \
+    --gradient_accumulation_steps 4 \
+    --num_train_epochs 100 \
+    --learning_rate 1e-4
+```
+
+#### 方式3: 保持原始长宽比
+
+如果数据集包含多种长宽比，可以使用 `auto` 模式：
+
+```bash
+accelerate launch --mixed_precision="bf16" train_style_lora.py \
+    --base_model "./models/flux_merged_base" \
+    --trans_vae "./models/TransparentVAE.pth" \
+    --data_dir "./training_data" \
+    --output_dir "./output/style_lora_auto" \
+    --aspect_ratio_type "auto" \
+    --resolution 1024 \
+    --batch_size 1 \
+    --gradient_accumulation_steps 4 \
+    --num_train_epochs 100 \
+    --learning_rate 1e-4
+```
+
+⚠️ **注意**: `auto` 模式下每张图像会保持原始长宽比，但这可能导致批次内图像尺寸不一致，建议 `batch_size=1`。
+
+#### 推荐尺寸
+
+| 长宽比 | 推荐尺寸 | 说明 |
+|--------|---------|------|
+| 1:1 (方形) | 1024x1024 | 标准设置 |
+| 9:16 (竖屏) | 768x1360 | 适合手机竖屏内容 |
+| 9:16 (竖屏) | 576x1024 | 显存受限时使用 |
+| 16:9 (横屏) | 1024x576 | 适合横屏视频 |
+| 16:9 (横屏) | 1360x768 | 更高质量横屏 |
+
+#### 显存消耗对比
+
+不同尺寸的显存消耗（在 batch_size=1, bf16 精度下）：
+
+| 分辨率 | 像素数 | 预估显存 |
+|--------|-------|---------|
+| 1024x1024 | 1.05M | ~20GB |
+| 768x1360 | 1.04M | ~20GB |
+| 576x1024 | 0.59M | ~14GB |
+| 1024x576 | 0.59M | ~14GB |
+
+💡 **技巧**: 如果显存不足，可以使用 576x1024 或 1024x576，质量损失不大。
 
 ---
 
