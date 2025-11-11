@@ -381,9 +381,18 @@ def compute_loss(
     """
     bsz = latents.shape[0]
 
+    # Check for NaN in inputs
+    if torch.isnan(latents).any():
+        raise ValueError("NaN detected in latents!")
+    if torch.isnan(prompt_embeds).any():
+        raise ValueError("NaN detected in prompt_embeds!")
+
     # Sample random timesteps
     # Flux uses a uniform distribution for flow matching
+    # Use a small epsilon to avoid t=0 which can cause numerical issues
     timesteps = torch.rand(bsz, device=latents.device)
+    # Clamp timesteps to avoid exact 0 or 1
+    timesteps = torch.clamp(timesteps, min=1e-7, max=1.0 - 1e-7)
     timesteps = timesteps.view(bsz)
 
     # Add noise to latents according to flow matching
@@ -391,7 +400,12 @@ def compute_loss(
 
     # Flow matching: interpolate between noise and data
     # x_t = t * x_1 + (1 - t) * x_0
-    noisy_latents = timesteps.view(-1, 1, 1, 1) * latents + (1 - timesteps.view(-1, 1, 1, 1)) * noise
+    t_expanded = timesteps.view(-1, 1, 1, 1)
+    noisy_latents = t_expanded * latents + (1 - t_expanded) * noise
+
+    # Check for NaN after noise addition
+    if torch.isnan(noisy_latents).any():
+        raise ValueError("NaN detected in noisy_latents!")
 
     # Prepare latent image ids (positional encoding)
     latent_height = latents.shape[2] // 2  # Height in packed patches
@@ -421,17 +435,24 @@ def compute_loss(
     # Flux uses 1000 timesteps internally
     timesteps_expanded = timesteps * 1000
 
+    # Prepare guidance - ensure it's not NaN
+    guidance = torch.full((bsz,), guidance_scale, device=latents.device, dtype=latents.dtype)
+
     # Forward pass through the model
     model_pred = model(
         hidden_states=packed_noisy_latents,
         timestep=timesteps_expanded,
-        guidance=torch.tensor([guidance_scale], device=latents.device, dtype=latents.dtype).expand(bsz),
+        guidance=guidance,
         pooled_projections=pooled_prompt_embeds,
         encoder_hidden_states=prompt_embeds,
         txt_ids=text_ids,
         img_ids=latent_image_ids,
         return_dict=False,
     )[0]
+
+    # Check for NaN in model output
+    if torch.isnan(model_pred).any():
+        raise ValueError("NaN detected in model predictions!")
 
     # Unpack the predictions
     # Get original image dimensions from latent dimensions
@@ -448,8 +469,20 @@ def compute_loss(
         vae_scale_factor,
     )
 
-    # Compute MSE loss
+    # Compute MSE loss with numerical stability
+    # Clamp values to prevent overflow
+    model_pred = torch.clamp(model_pred, min=-1e4, max=1e4)
+    target = torch.clamp(target, min=-1e4, max=1e4)
+
     loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+
+    # Check for NaN in loss
+    if torch.isnan(loss):
+        print(f"NaN loss detected!")
+        print(f"  model_pred: min={model_pred.min()}, max={model_pred.max()}, mean={model_pred.mean()}")
+        print(f"  target: min={target.min()}, max={target.max()}, mean={target.mean()}")
+        print(f"  timesteps: {timesteps}")
+        raise ValueError("NaN loss detected!")
 
     return loss
 
@@ -648,15 +681,30 @@ def main():
                         torch.cuda.empty_cache()
 
                 # Compute loss
-                loss = compute_loss(
-                    model=pipe.transformer,
-                    noise_scheduler=pipe.scheduler,
-                    latents=latents,
-                    prompt_embeds=prompt_embeds,
-                    pooled_prompt_embeds=pooled_prompt_embeds,
-                    text_ids=text_ids,
-                    guidance_scale=args.guidance_scale,
-                )
+                try:
+                    loss = compute_loss(
+                        model=pipe.transformer,
+                        noise_scheduler=pipe.scheduler,
+                        latents=latents,
+                        prompt_embeds=prompt_embeds,
+                        pooled_prompt_embeds=pooled_prompt_embeds,
+                        text_ids=text_ids,
+                        guidance_scale=args.guidance_scale,
+                    )
+                except ValueError as e:
+                    logger.error(f"Error computing loss: {e}")
+                    logger.error(f"Skipping batch at step {global_step}")
+                    continue
+
+                # Check for NaN or Inf in loss
+                if torch.isnan(loss) or torch.isinf(loss):
+                    logger.warning(f"NaN or Inf loss detected at step {global_step}, skipping batch")
+                    continue
+
+                # Check for abnormally large loss (might indicate instability)
+                if loss.item() > 1e4:
+                    logger.warning(f"Abnormally large loss {loss.item():.2f} at step {global_step}, skipping batch")
+                    continue
 
                 # Free up memory after loss computation
                 del latents, prompt_embeds, pooled_prompt_embeds, text_ids
