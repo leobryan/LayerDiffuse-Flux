@@ -174,10 +174,9 @@ def parse_args():
         help="Classifier-free guidance scale"
     )
     parser.add_argument(
-        "--use_offset",
+        "--disable_offset",
         action="store_true",
-        default=True,
-        help="Use transparency offset during encoding"
+        help="Disable transparency offset during encoding (TransparentVAE encoder will not be used)"
     )
     parser.add_argument(
         "--mixed_precision",
@@ -523,6 +522,12 @@ def main():
     trans_vae = TransparentVAE(pipe.vae, pipe.vae.dtype)
     trans_vae.load_state_dict(torch.load(args.trans_vae), strict=False)
 
+    # Log transparency encoding settings
+    use_transparency_encoder = not args.disable_offset
+    logger.info(f"Transparency offset encoder: {'ENABLED' if use_transparency_encoder else 'DISABLED'}")
+    logger.info(f"  - TransparentVAE encoder will {'be used' if use_transparency_encoder else 'NOT be used'} during latent encoding")
+    logger.info(f"  - Alpha value for offset: {trans_vae.alpha}")
+
     # Freeze VAE and text encoders
     pipe.vae.requires_grad_(False)
     trans_vae.requires_grad_(False)
@@ -650,7 +655,7 @@ def main():
                         img_rgba=img_rgba,
                         img_rgb=img_rgb,
                         padded_img_rgb=padded_rgb,
-                        use_offset=args.use_offset,
+                        use_offset=not args.disable_offset,  # Default: True (use TransparentVAE encoder)
                     )
 
                     if args.enable_cpu_offload:
