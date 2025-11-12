@@ -739,10 +739,20 @@ def main():
                     if accelerator.is_main_process:
                         save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                         logger.info(f"Saving checkpoint to {save_path}")
+                        os.makedirs(save_path, exist_ok=True)
 
-                        # Save LoRA weights
-                        unwrapped_model = accelerator.unwrap_model(pipe.transformer)
-                        unwrapped_model.save_pretrained(save_path)
+                        # Save LoRA weights only (not entire transformer)
+                        # This saves in diffusers-compatible format
+                        # Note: pipe.transformer was wrapped by accelerator.prepare()
+                        # We need to unwrap it before saving
+                        unwrapped_transformer = accelerator.unwrap_model(pipe.transformer)
+                        pipe.transformer = unwrapped_transformer
+                        pipe.save_lora_weights(
+                            save_path,
+                            safe_serialization=True  # Save as .safetensors
+                        )
+                        # Re-wrap for continued training
+                        pipe.transformer = accelerator.prepare(unwrapped_transformer)
 
                         # Save training state
                         accelerator.save_state(save_path)
@@ -754,9 +764,17 @@ def main():
     if accelerator.is_main_process:
         save_path = os.path.join(args.output_dir, "final_model")
         logger.info(f"Saving final model to {save_path}")
+        os.makedirs(save_path, exist_ok=True)
 
-        unwrapped_model = accelerator.unwrap_model(pipe.transformer)
-        unwrapped_model.save_pretrained(save_path)
+        # Save LoRA weights only (not entire transformer)
+        # This saves in diffusers-compatible format
+        # Note: pipe.transformer was wrapped by accelerator.prepare()
+        unwrapped_transformer = accelerator.unwrap_model(pipe.transformer)
+        pipe.transformer = unwrapped_transformer
+        pipe.save_lora_weights(
+            save_path,
+            safe_serialization=True  # Save as .safetensors
+        )
 
         # Save metadata
         metadata = {
@@ -769,6 +787,9 @@ def main():
         }
         with open(os.path.join(save_path, "metadata.json"), "w") as f:
             json.dump(metadata, f, indent=2)
+
+        logger.info(f"LoRA weights saved to {save_path}")
+        logger.info("To use the LoRA: pipe.load_lora_weights('{save_path}')")
 
     accelerator.end_training()
     logger.info("Training completed!")
