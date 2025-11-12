@@ -194,12 +194,11 @@ def cache_latents_and_embeddings(
     text_embeddings_cache = []
     unique_prompts = {}  # Cache unique prompts
 
-    # Move models to GPU for encoding
-    if args.enable_cpu_offload:
-        pipe.vae.to(accelerator.device)
-        trans_vae.to(accelerator.device)
-        pipe.text_encoder.to(accelerator.device)
-        pipe.text_encoder_2.to(accelerator.device)
+    # Move models to GPU for encoding (always needed during caching, regardless of CPU offload setting)
+    pipe.vae.to(accelerator.device)
+    trans_vae.to(accelerator.device)
+    pipe.text_encoder.to(accelerator.device)
+    pipe.text_encoder_2.to(accelerator.device)
 
     progress_bar = tqdm(train_dataloader, desc="Caching", disable=not accelerator.is_local_main_process)
 
