@@ -24,6 +24,7 @@ from diffusers.training_utils import (
     compute_loss_weighting_for_sd3,
 )
 from peft import LoraConfig, get_peft_model
+from peft.utils import get_peft_model_state_dict
 from tqdm.auto import tqdm
 
 from lib_layerdiffuse.vae import TransparentVAE
@@ -627,12 +628,12 @@ def main():
 
                         # Save LoRA weights
                         unwrapped_transformer = accelerator.unwrap_model(pipe.transformer)
-                        pipe.transformer = unwrapped_transformer
-                        pipe.save_lora_weights(
-                            save_path,
+                        transformer_lora_layers = get_peft_model_state_dict(unwrapped_transformer)
+                        FluxPipeline.save_lora_weights(
+                            save_directory=save_path,
+                            transformer_lora_layers=transformer_lora_layers,
                             safe_serialization=True
                         )
-                        pipe.transformer = accelerator.prepare(unwrapped_transformer)
 
                         # Save training state
                         accelerator.save_state(save_path)
@@ -647,9 +648,10 @@ def main():
         os.makedirs(save_path, exist_ok=True)
 
         unwrapped_transformer = accelerator.unwrap_model(pipe.transformer)
-        pipe.transformer = unwrapped_transformer
-        pipe.save_lora_weights(
-            save_path,
+        transformer_lora_layers = get_peft_model_state_dict(unwrapped_transformer)
+        FluxPipeline.save_lora_weights(
+            save_directory=save_path,
+            transformer_lora_layers=transformer_lora_layers,
             safe_serialization=True
         )
 
